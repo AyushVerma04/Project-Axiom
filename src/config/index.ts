@@ -5,6 +5,20 @@ import dotenv from 'dotenv';
 // any existing system-level environment variables with the same name.
 dotenv.config({ path: path.resolve(__dirname, '../../config/env/.env'), override: true });
 
+const ollamaHost = process.env.OLLAMA_HOST || 'http://localhost:11434';
+
+function getOllamaHost(host: string): string {
+  try {
+    const url = new URL(host);
+    if (url.hostname === '0.0.0.0') {
+      url.hostname = 'localhost';
+    }
+    return url.toString();
+  } catch {
+    return host;
+  }
+}
+
 export const config = {
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -13,7 +27,7 @@ export const config = {
       : [],
   },
   ollama: {
-    host: process.env.OLLAMA_HOST || 'http://localhost:11434',
+    host: getOllamaHost(ollamaHost),
     model: process.env.OLLAMA_MODEL || 'llama3.1',
   },
   groq: {

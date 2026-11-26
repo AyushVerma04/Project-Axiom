@@ -4,6 +4,7 @@ export type ActionType =
   | 'open_app'
   | 'open_file'
   | 'open_folder'
+  | 'find_file'
   | 'open_browser'
   | 'search_web'
   | 'run_command'

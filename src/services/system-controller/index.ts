@@ -126,6 +126,12 @@ export class SystemController {
       case 'open_folder':
         return fileManager.openInOS(p.path as string);
 
+      case 'find_file':
+        return fileManager.findFiles(
+          p.query as string,
+          typeof p.location === 'string' ? p.location : undefined
+        );
+
       case 'open_browser': {
         const browser = p.browser as string | undefined;
         const url = browserController.resolveWebsite(p.url as string) || (p.url as string);
@@ -279,7 +285,10 @@ export class SystemController {
       const result = results[i];
       const icon = result?.success ? '✅' : '❌';
       lines.push(`${icon} ${step.description}`);
-      if (!result?.success && result?.message) {
+      if (
+        result?.message &&
+        (!result.success || step.command.action === 'find_file')
+      ) {
         lines.push(`   → ${result.message}`);
       }
     }

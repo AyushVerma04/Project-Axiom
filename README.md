@@ -47,7 +47,7 @@ A **fully local AI automation assistant** controlled through **Telegram**, power
 | Feature | Description |
 |---|---|
 | **App Launcher** | Open any installed application by name (VS Code, Chrome, Spotify, etc.) |
-| **File System** | Create, read, write, delete files and folders with path validation |
+| **File System** | Search and open files across local drives; create, write, and delete within allowed paths |
 | **Browser Control** | Open URLs, search the web, resolve well-known sites |
 | **Shell Commands** | Execute shell commands with whitelist/blacklist security |
 | **Git Automation** | Clone repositories and open them in editors |
@@ -121,6 +121,8 @@ Open Telegram, find your bot, and send:
 
 - "Open VS Code"
 - "Open LeetCode in Chrome"
+- "Open doomsday trailer on YouTube"
+- "Find my presentation on D drive"
 - "Clone https://github.com/user/repo and open it in VS Code"
 - "Write 10 lines about AI in a text file"
 - "Open my downloads folder"
@@ -203,7 +205,7 @@ This assistant executes real commands on your computer. Built-in safeguards incl
 
 - **Command blacklist** — blocks destructive patterns (`rm -rf /`, `format C:`, `shutdown`, etc.)
 - **Command whitelist** — common safe commands are pre-approved
-- **Path validation** — restricts file access to allowed directories
+- **Path validation** — file writes/deletes stay within allowed directories; filename searches are read-only and skip system folders
 - **URL validation** — blocks local/internal network access (prevents SSRF)
 - **User authorization** — optionally restrict the bot to specific Telegram user IDs
 - **Execution timeout** — all commands have a configurable timeout limit
@@ -218,13 +220,13 @@ This assistant executes real commands on your computer. Built-in safeguards incl
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — | Your Telegram bot API token (required) |
 | `TELEGRAM_ALLOWED_USER_IDS` | *(empty = open)* | Comma-separated Telegram user IDs |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint (`0.0.0.0` is normalized to `localhost`) |
 | `OLLAMA_MODEL` | `llama3.1` | Ollama model name |
 | `PORT` | `3000` | Health check API port |
 | `NODE_ENV` | `development` | Environment mode |
 | `LOG_LEVEL` | `info` | Logging verbosity |
 | `COMMAND_TIMEOUT` | `30000` | Max command runtime (ms) |
-| `ALLOWED_PATHS` | `C:\Users` | Allowed file system paths |
+| `ALLOWED_PATHS` | `C:\Users` | Directories allowed for file creation, writing, and deletion |
 | `REQUIRE_CONFIRMATION` | `true` | Confirm risky actions |
 
 ---

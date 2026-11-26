@@ -29,6 +29,12 @@ const PROTECTED_PATHS = [
   '/usr/bin', '/usr/sbin',
 ];
 
+function isWithinPath(targetPath: string, rootPath: string): boolean {
+  const relative = path.relative(path.resolve(rootPath), path.resolve(targetPath));
+  return relative === '' ||
+    (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 /**
  * Security Validator
  * Validates commands and file paths before execution.
@@ -64,7 +70,7 @@ export class SecurityValidator {
 
     // Block access to protected system paths
     for (const protectedPath of PROTECTED_PATHS) {
-      if (resolved.toLowerCase().startsWith(protectedPath.toLowerCase())) {
+      if (isWithinPath(resolved, protectedPath)) {
         return {
           allowed: false,
           reason: `Access to system directory "${protectedPath}" is not allowed.`,
@@ -76,7 +82,7 @@ export class SecurityValidator {
     const allowedPaths = config.security.allowedPaths;
     if (allowedPaths.length > 0) {
       const isAllowed = allowedPaths.some((allowed) =>
-        resolved.startsWith(path.resolve(allowed))
+        isWithinPath(resolved, allowed)
       );
 
       if (!isAllowed) {

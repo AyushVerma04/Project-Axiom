@@ -5,6 +5,13 @@ import TelegramBotService from './services/telegram-bot';
 import aiEngine from './services/ai-engine';
 import groqEngine from './services/groq-engine';
 
+// Clean up VS Code / Electron variables that leak from parent IDE processes
+// and prevent child GUI apps (like VS Code, Cursor, Discord, etc.) from opening windows
+delete process.env.ELECTRON_RUN_AS_NODE;
+delete process.env.VSCODE_IPC_HOOK;
+delete process.env.VSCODE_PID;
+delete process.env.VSCODE_GIT_IPC_HANDLE;
+
 async function main(): Promise<void> {
   logger.info('═══════════════════════════════════════════════════════');
   logger.info('  Clawd AI Assistant — JARVIS Mode — Starting up...');

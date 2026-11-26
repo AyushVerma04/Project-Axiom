@@ -42,6 +42,7 @@ AVAILABLE ACTIONS:
 - "open_app"         → { "app": "<name>" }
 - "open_file"        → { "path": "<absolute path>" }
 - "open_folder"      → { "path": "<absolute path or named: desktop/downloads/documents>" }
+- "find_file"        → { "query": "<filename or part of filename>", "location": "<optional folder or drive>" }
 - "open_browser"     → { "url": "<url>", "browser": "<chrome|firefox|edge|>" }
 - "search_web"       → { "query": "<query>", "browser": "<browser or empty>" }
 - "run_command"      → { "command": "<shell cmd>", "cwd": "<absolute Windows path or omit>" }
@@ -69,9 +70,11 @@ CRITICAL RULES:
 2. When user wants to CREATE a game/app/project → use "search_and_clone" to find a real existing repo, then "open_in_editor" so the AI editor can work on it.
 3. For new apps with standard scaffolding → use "run_command" with npx/npm init/create-next-app etc., then "open_in_editor".
 4. "open_in_editor" should always follow clone/scaffold steps so the user can start coding.
-5. cwd in run_command must be a real absolute Windows path or omitted entirely.
-6. Resolve named folders: "desktop" → "${desktop}", "downloads" → "${home}\\\\Downloads".
-7. For simple questions/chat → use "chat" action.
+5. Use "find_file" for filename searches; never guess a user's Windows username or an absolute path.
+6. For YouTube titles, use an https://www.youtube.com/results?search_query= URL. Never invent video IDs or use shell commands to find a video.
+7. cwd in run_command must be a real absolute Windows path or omitted entirely.
+8. Resolve named folders: "desktop" → "${desktop}", "downloads" → "${home}\\\\Downloads".
+9. For simple questions/chat → use "chat" action.
 
 DECISION GUIDE:
 - "create a [game/app]" (no specific repo) → search_and_clone + open_in_editor

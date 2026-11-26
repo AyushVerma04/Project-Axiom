@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import os from 'os';
 import { config } from '../../config';
 import { AICommand, OllamaGenerateRequest, OllamaGenerateResponse } from '../../shared/types';
 import logger from '../../shared/logger';
@@ -96,6 +97,12 @@ const KNOWN_APPS: Record<string, string> = {
   calculator: 'Calculator',
   calc: 'Calculator',
   paint: 'Paint',
+  cursor: 'Cursor',
+  'cursor editor': 'Cursor',
+  windsurf: 'Windsurf',
+  'windsurf editor': 'Windsurf',
+  telegram: 'Telegram',
+  whatsapp: 'WhatsApp',
 };
 
 /** Named folder aliases. */
@@ -142,6 +149,53 @@ const FILE_CONTEXT_PATTERNS = [
 function tryRuleBased(message: string, context?: SessionContext): AICommand | null {
   const msg = message.toLowerCase().trim();
 
+  // ─── YouTube search/play requests must never depend on guessed video IDs ──
+  const youtubeTitleMatch = message.trim().match(
+    /^(?:play|put on|listen to|open|search for|find)\s+(.+?)\s+(?:on|in)\s+(?:youtube|yt)(?:\s+in\s+(?:chrome|firefox|edge))?$/i
+  );
+  const youtubeCommandMatch = message.trim().match(
+    /^open\s+(?:youtube|yt)\s+and\s+(?:play|search(?:\s+for)?)\s+(.+)$/i
+  );
+  const youtubeSearchMatch = message.trim().match(
+    /^(?:search|find)\s+(?:on\s+)?(?:youtube|yt)\s+for\s+(.+)$/i
+  );
+  const youtubeQuery =
+    youtubeTitleMatch?.[1] || youtubeCommandMatch?.[1] || youtubeSearchMatch?.[1];
+  if (youtubeQuery) {
+    return {
+      action: 'open_browser',
+      params: {
+        url: `https://www.youtube.com/results?search_query=${encodeURIComponent(youtubeQuery.trim())}`,
+        browser: '',
+      },
+    };
+  }
+
+  // ─── Search for files without asking the model to invent an absolute path ─
+  const explicitFileSearch = message.trim().match(
+    /^(?:find|search for|locate)\s+(?:the\s+)?(?:file|document)\s+(.+?)(?:\s+(?:in|on|under|inside)\s+(.+))?$/i
+  );
+  const locatedFileSearch = message.trim().match(
+    /^(?:find|search for|locate)\s+(.+?)\s+(?:in|on|under|inside)\s+((?:[a-z]:(?:[\\/].*|$)|[a-z]\s+drive\b.*|desktop\b.*|downloads?\b.*|documents?\b.*))$/i
+  );
+  const rawFileSearchQuery = explicitFileSearch?.[1] || locatedFileSearch?.[1];
+  const fileSearchQuery = rawFileSearchQuery
+    ?.replace(/^(?:my|the|a|an)\s+/i, '')
+    .replace(/^(?:named|called)\s+/i, '')
+    .replace(/^(['"])(.*)\1$/, '$2')
+    .trim();
+  if (fileSearchQuery) {
+    return {
+      action: 'find_file',
+      params: {
+        query: fileSearchQuery,
+        ...(explicitFileSearch?.[2] || locatedFileSearch?.[2]
+          ? { location: (explicitFileSearch?.[2] || locatedFileSearch?.[2])!.trim() }
+          : {}),
+      },
+    };
+  }
+
   // ─── File context follow-up questions ("where is this file?") ────────────
   if (context?.lastCreatedFile && FILE_CONTEXT_PATTERNS.some((p) => p.test(msg))) {
     return {
@@ -171,9 +225,9 @@ function tryRuleBased(message: string, context?: SessionContext): AICommand | nu
     return { action: 'open_folder', params: { path: inExplorerMatch[1].trim() } };
   }
 
-  // ─── "Open <website>" / "Open <website> in <browser>" ────────────────────
+  // ─── "Open <website>" / "Open <website> in/on/with <browser>" ────────────
   const openInBrowserMatch = msg.match(
-    /^(?:open|launch|go to|visit|browse to?)\s+(.+?)\s+in\s+(chrome|firefox|edge|safari)$/i
+    /^(?:open|launch|go to|visit|browse to?)\s+(.+?)\s+(?:in|on|with|using)\s+(chrome|firefox|edge|safari|brave)$/i
   );
   if (openInBrowserMatch) {
     const siteName = openInBrowserMatch[1].trim().toLowerCase();
@@ -295,6 +349,10 @@ export class AIEngine {
 
   /** The system prompt that instructs the LLM to output structured JSON. */
   private getSystemPrompt(): string {
+    const home = os.homedir().replace(/\\/g, '\\\\');
+    const desktop = `${home}\\\\Desktop`;
+    const downloads = `${home}\\\\Downloads`;
+
     return `You are Clawd, a helpful local AI assistant that can both control a user's computer AND answer questions like a normal AI assistant.
 
 When the user gives a COMPUTER TASK, respond with valid JSON only. No extra text, no markdown, no code fences.
@@ -304,6 +362,7 @@ Available action types:
 - "open_app"        → params: { "app": "<app name>" }
 - "open_file"       → params: { "path": "<file path>" }
 - "open_folder"     → params: { "path": "<folder path>" }
+- "find_file"       → params: { "query": "<filename or part of filename>", "location": "<optional folder or drive>" }
 - "open_browser"    → params: { "url": "<url>", "browser": "<browser name or empty>" }
 - "search_web"      → params: { "query": "<search query>", "browser": "<browser or empty>" }
 - "run_command"     → params: { "command": "<shell command>", "cwd": "<optional working dir>" }
@@ -321,11 +380,13 @@ Rules:
 2. For computer tasks, always pick the most specific action type.
 3. For multi-step tasks, use "multi_step" with an ordered array of steps.
 4. Resolve well-known website names to URLs (e.g., "LeetCode" → "https://leetcode.com").
-5. Resolve common folder names (e.g., "downloads" → user's Downloads folder path, "desktop" → Desktop folder).
-6. If a command involves creating content, use "generate_content" first then "create_file".
-7. Do NOT include explanations outside the JSON. Output ONLY the JSON object.
-8. NEVER use placeholder or fake GitHub URLs (e.g. do NOT use "https://github.com/user/repo.git" or any URL with "user" as the owner). If the user asks to CREATE a project, game, or app, write the actual code using "create_file" steps — do NOT clone a repo.
-9. When specifying "cwd" in "run_command", always use a valid absolute Windows path (e.g. "C:\\Users\\username") or omit "cwd" entirely. NEVER set "cwd" to "/".
+5. Use "find_file" for filename searches; do not guess an absolute path. Search C: and D: when the user asks for those drives.
+6. Resolve common folder names (e.g., "downloads" → "${downloads}", "desktop" → "${desktop}").
+7. If a command involves creating content, use "generate_content" first then "create_file". Save files to "${desktop}" when no location is specified.
+8. Do NOT include explanations outside the JSON. Output ONLY the JSON object.
+9. NEVER use placeholder or fake GitHub URLs (e.g. do NOT use "https://github.com/user/repo.git" or any URL with "user" as the owner). If the user asks to CREATE a project, game, or app, write the actual code using "create_file" steps — do NOT clone a repo.
+10. When specifying "cwd" in "run_command", use a real absolute path such as "${home}" or omit "cwd" entirely. NEVER use a placeholder username or set "cwd" to "/".
+11. For YouTube titles, use an https://www.youtube.com/results?search_query= URL. Never invent video IDs or use shell commands to find a video.
 
 Examples:
 
@@ -336,13 +397,13 @@ User: "Open LeetCode in Chrome"
 {"action":"open_browser","params":{"url":"https://leetcode.com","browser":"chrome"}}
 
 User: "Open desktop in file explorer"
-{"action":"open_folder","params":{"path":"desktop"}}
+{"action":"open_folder","params":{"path":"${desktop}"}}
 
 User: "What is GitHub?"
 {"action":"chat","params":{"question":"What is GitHub?"}}
 
 User: "Write 10 lines about AI in a text file"
-{"action":"multi_step","params":{"steps":[{"action":"generate_content","params":{"topic":"AI","format":"txt","lines":10}},{"action":"create_file","params":{"path":"ai_notes.txt","content":"{{generated}}"}}]}}
+{"action":"multi_step","params":{"steps":[{"action":"generate_content","params":{"topic":"AI","format":"txt","lines":10}},{"action":"create_file","params":{"path":"${desktop}\\\\ai_notes.txt","content":"{{generated}}"}}]}}
 
 User: "Search Docker tutorial"
 {"action":"search_web","params":{"query":"Docker tutorial","browser":""}}
@@ -477,7 +538,7 @@ User: "How are you?"
   /** Check if Ollama is reachable and the model is available. */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await this.client.get('/api/tags');
+      const response = await this.client.get('/api/tags', { timeout: 5000 });
       const models = response.data?.models || [];
       const hasModel = models.some(
         (m: { name: string }) => m.name.startsWith(this.model)
@@ -485,10 +546,9 @@ User: "How are you?"
 
       if (!hasModel) {
         logger.warn(
-          `Model ${this.model} not found. Available: ${models.map((m: { name: string }) => m.name).join(', ')}`
+          `Model ${this.model} is not available in Ollama. Run "ollama pull ${this.model}" to install it.`
         );
-        logger.info(`Attempting to pull model ${this.model}...`);
-        await this.client.post('/api/pull', { name: this.model });
+        return false;
       }
 
       return true;

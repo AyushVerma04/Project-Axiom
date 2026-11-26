@@ -38,6 +38,8 @@ export class TelegramBotService {
         `*Quick Examples:*\n` +
         `• "Create a tic tac toe game"\n` +
         `• "Open VS Code"\n` +
+        `• "Open doomsday trailer on YouTube"\n` +
+        `• "Find my presentation on D drive"\n` +
         `• "Check system health"\n` +
         `• "Send email to boss@company.com about meeting"\n` +
         `• "Create a note in Notion about my project"\n` +
@@ -68,7 +70,7 @@ export class TelegramBotService {
         `🔍 Search the web\n` +
         `💻 Create & scaffold full projects\n` +
         `✏️ Modify existing code files\n` +
-        `📁 Read, write, delete files\n` +
+        `📁 Find, read, write, and delete files\n` +
         `🚀 Deploy to GitHub\n` +
         `📊 System health monitoring\n` +
         `✉️ Send emails\n` +

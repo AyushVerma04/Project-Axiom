@@ -1,63 +1,12 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import os from 'os';
+import open, { apps } from 'open';
 import { ExecutionResult } from '../../shared/types';
 import logger from '../../shared/logger';
 
-const execAsync = promisify(exec);
-
 /**
  * Browser Controller Module
- * Opens URLs and performs web searches.
+ * Opens URLs and performs web searches using the system browser.
  */
 export class BrowserController {
-  private platform: NodeJS.Platform;
-
-  constructor() {
-    this.platform = os.platform();
-  }
-
-  /** Build a platform-specific command to open a URL in a given browser. */
-  private buildOpenCommand(url: string, browser?: string): string {
-    const browserLower = (browser || 'default').toLowerCase();
-
-    if (this.platform === 'win32') {
-      // On Windows, 'start' needs an empty-string first arg as the window title.
-      // Without it, start treats the URL as the title and opens a blank CMD window.
-      const browserMap: Record<string, string> = {
-        chrome: 'start chrome',
-        firefox: 'start firefox',
-        edge: 'start msedge',
-      };
-      const cmd = browserMap[browserLower];
-      if (cmd) {
-        return `${cmd} "${url}"`;
-      }
-      // Default: open in whatever the user's default browser is
-      return `start "" "${url}"`;
-    }
-
-    if (this.platform === 'darwin') {
-      const browserMap: Record<string, string> = {
-        chrome: 'open -a "Google Chrome"',
-        firefox: 'open -a Firefox',
-        safari: 'open -a Safari',
-        default: 'open',
-      };
-      const cmd = browserMap[browserLower] || browserMap['default'];
-      return `${cmd} "${url}"`;
-    }
-
-    // Linux
-    const browserMap: Record<string, string> = {
-      chrome: 'google-chrome',
-      firefox: 'firefox',
-      default: 'xdg-open',
-    };
-    const cmd = browserMap[browserLower] || browserMap['default'];
-    return `${cmd} "${url}"`;
-  }
-
   /** Validate that a string is a safe URL. */
   private isValidUrl(url: string): boolean {
     try {
@@ -70,8 +19,7 @@ export class BrowserController {
 
   /** Open a URL in the user's browser. */
   async openUrl(url: string, browser?: string): Promise<ExecutionResult> {
-    // Add https if no protocol is specified
-    let fullUrl = url;
+    let fullUrl = url.trim();
     if (!fullUrl.startsWith('http://') && !fullUrl.startsWith('https://')) {
       fullUrl = `https://${fullUrl}`;
     }
@@ -81,13 +29,21 @@ export class BrowserController {
     }
 
     try {
-      const cmd = this.buildOpenCommand(fullUrl, browser);
-      logger.info(`Opening URL: ${fullUrl} (browser: ${browser || 'default'}) -> ${cmd}`);
-      await execAsync(cmd, {
-        timeout: 10_000,
-        // 'start' is a cmd.exe built-in; must run inside cmd.exe on Windows
-        shell: this.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
-      });
+      logger.info(`Opening URL: ${fullUrl} (browser: ${browser || 'default'})`);
+      const b = (browser || '').toLowerCase().trim();
+
+      if (b === 'chrome' || b === 'google chrome') {
+        await open(fullUrl, { app: { name: apps.chrome } }).catch(() => open(fullUrl));
+      } else if (b === 'edge' || b === 'microsoft edge') {
+        await open(fullUrl, { app: { name: apps.edge } }).catch(() => open(fullUrl));
+      } else if (b === 'firefox' || b === 'mozilla firefox') {
+        await open(fullUrl, { app: { name: apps.firefox } }).catch(() => open(fullUrl));
+      } else if (b === 'brave') {
+        await open(fullUrl, { app: { name: apps.brave } }).catch(() => open(fullUrl));
+      } else {
+        await open(fullUrl);
+      }
+
       return { success: true, message: `Opened ${fullUrl} in ${browser || 'default browser'}` };
     } catch (error: unknown) {
       const msg = (error as Error).message;

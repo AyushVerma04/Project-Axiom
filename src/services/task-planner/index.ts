@@ -61,6 +61,8 @@ export class TaskPlanner {
         return `Open file: ${p.path}`;
       case 'open_folder':
         return `Open folder: ${p.path}`;
+      case 'find_file':
+        return `Find file: ${p.query}${p.location ? ` in ${p.location}` : ''}`;
       case 'open_browser':
         return `Open URL: ${p.url}${p.browser ? ` in ${p.browser}` : ''}`;
       case 'search_web':

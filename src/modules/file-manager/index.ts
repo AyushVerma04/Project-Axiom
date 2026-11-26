@@ -2,77 +2,194 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import open from 'open';
 import { ExecutionResult } from '../../shared/types';
 import logger from '../../shared/logger';
+import { resolveUserPath } from '../../shared/path-utils';
 import { config } from '../../config';
 
-const execAsync = promisify(exec);
+const MAX_SEARCH_RESULTS = 20;
+const MAX_SEARCH_ENTRIES = 50_000;
+const MAX_SEARCH_TIME_MS = 15_000;
+const SKIPPED_SEARCH_DIRECTORIES = new Set([
+  '$recycle.bin',
+  'appdata',
+  'config.msi',
+  'node_modules',
+  'program files',
+  'program files (x86)',
+  'programdata',
+  'recovery',
+  'system volume information',
+  'windows',
+  '.git',
+  '.svn',
+]);
 
 /**
  * File Manager Module
  * Handles file/folder creation, reading, deletion, and opening in the OS.
  */
 export class FileManager {
-  /** Validate that a path is within the allowed directories. */
-  private validatePath(targetPath: string): boolean {
+  private isWithinPath(targetPath: string, rootPath: string): boolean {
     const resolved = path.resolve(targetPath);
-    const allowedPaths = config.security.allowedPaths;
+    const root = path.resolve(rootPath);
+    const relative = path.relative(root, resolved);
+    return relative === '' ||
+      (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  }
 
-    // If no restrictions are set, allow all paths under the user's home dir
-    if (allowedPaths.length === 0) {
-      return resolved.startsWith(os.homedir());
+  private isProtectedPath(targetPath: string): boolean {
+    const resolved = path.resolve(targetPath);
+    const protectedPaths = process.platform === 'win32'
+      ? [
+          path.join(path.parse(resolved).root, 'Windows'),
+          path.join(path.parse(resolved).root, 'Program Files'),
+          path.join(path.parse(resolved).root, 'Program Files (x86)'),
+          path.join(path.parse(resolved).root, 'ProgramData'),
+          path.join(path.parse(resolved).root, '$Recycle.Bin'),
+          path.join(path.parse(resolved).root, 'System Volume Information'),
+        ]
+      : ['/etc', '/boot', '/sys', '/proc', '/usr/bin', '/usr/sbin'];
+
+    return protectedPaths.some((protectedPath) => this.isWithinPath(resolved, protectedPath));
+  }
+
+  /** Writes and deletes stay inside ALLOWED_PATHS; read/search may also use local drives. */
+  private validatePath(targetPath: string, allowDriveRead = false): boolean {
+    const resolved = path.resolve(targetPath);
+    if (this.isProtectedPath(resolved)) return false;
+
+    const allowedPaths = config.security.allowedPaths.length > 0
+      ? config.security.allowedPaths
+      : [os.homedir()];
+
+    if (allowedPaths.some((allowed) => this.isWithinPath(resolved, allowed))) {
+      return true;
     }
 
-    return allowedPaths.some((allowed) => resolved.startsWith(path.resolve(allowed)));
+    return allowDriveRead &&
+      process.platform === 'win32' &&
+      /^[a-z]:\\?$/i.test(path.parse(resolved).root);
   }
 
   /** Resolve common path aliases like ~ to actual paths. */
   resolvePath(inputPath: string): string {
-    let resolved = inputPath;
+    return resolveUserPath(inputPath);
+  }
 
-    // Resolve ~ to home directory
-    if (resolved.startsWith('~')) {
-      resolved = path.join(os.homedir(), resolved.slice(1));
+  /** Search filenames (not file contents) in a folder or on local drives. */
+  async findFiles(query: string, location?: string): Promise<ExecutionResult> {
+    const needle = query.trim().toLowerCase();
+    if (!needle) {
+      return { success: false, message: 'Please provide a filename or part of a filename to search for.' };
     }
 
-    // Named folder map (canonical names → absolute paths)
-    const namedFolders: Record<string, string> = {
-      downloads: path.join(os.homedir(), 'Downloads'),
-      download: path.join(os.homedir(), 'Downloads'),
-      documents: path.join(os.homedir(), 'Documents'),
-      document: path.join(os.homedir(), 'Documents'),
-      docs: path.join(os.homedir(), 'Documents'),
-      desktop: path.join(os.homedir(), 'Desktop'),
-      pictures: path.join(os.homedir(), 'Pictures'),
-      photos: path.join(os.homedir(), 'Pictures'),
-      images: path.join(os.homedir(), 'Pictures'),
-      music: path.join(os.homedir(), 'Music'),
-      videos: path.join(os.homedir(), 'Videos'),
-      movies: path.join(os.homedir(), 'Videos'),
-      home: os.homedir(),
-    };
-
-    // Strip leading slashes and trailing whitespace so "/desktop" → "desktop"
-    const stripped = inputPath.replace(/^[\/\\]+/, '').toLowerCase().trim();
-
-    // Also strip trailing " folder" or " directory" suffix
-    const withoutSuffix = stripped.replace(/\s*(folder|directory)$/i, '').trim();
-
-    if (namedFolders[withoutSuffix]) {
-      resolved = namedFolders[withoutSuffix];
-    } else if (namedFolders[stripped]) {
-      resolved = namedFolders[stripped];
+    const roots = location
+      ? [this.resolveSearchLocation(location)]
+      : this.getDefaultSearchRoots();
+    if (roots.some((root) => !this.validatePath(root, true))) {
+      return { success: false, message: 'Search location is not an allowed local path.' };
     }
 
-    return path.resolve(resolved);
+    const results: Array<{ path: string; type: 'file' }> = [];
+    const visited = new Set<string>();
+    let entriesVisited = 0;
+    let inaccessibleDirectories = 0;
+    const deadline = Date.now() + MAX_SEARCH_TIME_MS;
+    let stoppedEarly = false;
+
+    for (const root of roots) {
+      const stack = [root];
+      while (stack.length > 0 && results.length < MAX_SEARCH_RESULTS) {
+        if (entriesVisited >= MAX_SEARCH_ENTRIES || Date.now() >= deadline) {
+          stoppedEarly = true;
+          break;
+        }
+
+        const current = stack.pop()!;
+        const visitKey = path.resolve(current).toLowerCase();
+        if (visited.has(visitKey)) continue;
+        visited.add(visitKey);
+
+        let entries: import('fs').Dirent[];
+        try {
+          entries = await fs.readdir(current, { withFileTypes: true });
+        } catch {
+          inaccessibleDirectories++;
+          continue;
+        }
+
+        for (const entry of entries) {
+          entriesVisited++;
+          const entryPath = path.join(current, entry.name);
+          if (entry.isDirectory()) {
+            if (!SKIPPED_SEARCH_DIRECTORIES.has(entry.name.toLowerCase())) {
+              stack.push(entryPath);
+            }
+          } else if (entry.isFile() && entry.name.toLowerCase().includes(needle)) {
+            results.push({ path: entryPath, type: 'file' });
+            if (results.length >= MAX_SEARCH_RESULTS) break;
+          }
+
+          if (entriesVisited >= MAX_SEARCH_ENTRIES || Date.now() >= deadline) {
+            stoppedEarly = true;
+            break;
+          }
+        }
+
+        if (stoppedEarly) break;
+      }
+      if (stoppedEarly || results.length >= MAX_SEARCH_RESULTS) break;
+    }
+
+    const locationDescription = location || 'Desktop, Downloads, Documents, C: and D:';
+    const details = [
+      results.length
+        ? `Found ${results.length} matching file(s) in ${locationDescription}:`
+        : `No files matching "${query}" were found in ${locationDescription}.`,
+      ...results.map((result) => `• ${result.path}`),
+    ];
+    if (stoppedEarly) details.push('Search stopped at its time or entry limit; results may be incomplete.');
+    if (inaccessibleDirectories > 0) {
+      details.push(`Skipped ${inaccessibleDirectories} folder(s) that Windows would not let the bot read.`);
+    }
+
+    logger.info(`File search for "${query}" checked ${entriesVisited} entries and found ${results.length} match(es).`);
+    return { success: true, message: details.join('\n'), data: results };
+  }
+
+  private resolveSearchLocation(location: string): string {
+    const trimmed = location.trim();
+    const driveMatch = trimmed.match(/^([a-z]):?(?:\s+drive)?[\\/]?$/i);
+    if (driveMatch) return `${driveMatch[1].toUpperCase()}:\\`;
+    return this.resolvePath(trimmed.replace(/\s+drive$/i, ''));
+  }
+
+  private getDefaultSearchRoots(): string[] {
+    if (process.platform !== 'win32') {
+      return [
+        path.join(os.homedir(), 'Desktop'),
+        path.join(os.homedir(), 'Downloads'),
+        path.join(os.homedir(), 'Documents'),
+        os.homedir(),
+      ];
+    }
+
+    return [
+      path.join(os.homedir(), 'Desktop'),
+      path.join(os.homedir(), 'Downloads'),
+      path.join(os.homedir(), 'Documents'),
+      os.homedir(),
+      path.parse(os.homedir()).root,
+      'D:\\',
+    ];
   }
 
   /** Read a file's content. */
   async readFile(filePath: string): Promise<ExecutionResult> {
     const resolved = this.resolvePath(filePath);
-    if (!this.validatePath(resolved)) {
+    if (!this.validatePath(resolved, true)) {
       return { success: false, message: `Access denied: path "${resolved}" is outside allowed directories` };
     }
 
@@ -125,7 +242,7 @@ export class FileManager {
   /** List contents of a directory. */
   async listDirectory(dirPath: string): Promise<ExecutionResult> {
     const resolved = this.resolvePath(dirPath);
-    if (!this.validatePath(resolved)) {
+    if (!this.validatePath(resolved, true)) {
       return { success: false, message: `Access denied: path "${resolved}" is outside allowed directories` };
     }
 
@@ -162,7 +279,7 @@ export class FileManager {
   /** Open a file or folder in the OS default handler. */
   async openInOS(targetPath: string): Promise<ExecutionResult> {
     const resolved = this.resolvePath(targetPath);
-    if (!this.validatePath(resolved)) {
+    if (!this.validatePath(resolved, true)) {
       return { success: false, message: `Access denied: path "${resolved}" is outside allowed directories` };
     }
 
@@ -171,17 +288,7 @@ export class FileManager {
     }
 
     try {
-      const platform = os.platform();
-      let cmd: string;
-      if (platform === 'win32') {
-        cmd = `start "" "${resolved}"`;
-      } else if (platform === 'darwin') {
-        cmd = `open "${resolved}"`;
-      } else {
-        cmd = `xdg-open "${resolved}"`;
-      }
-
-      await execAsync(cmd, { timeout: 10_000 });
+      await open(resolved);
       logger.info(`Opened in OS: ${resolved}`);
       return { success: true, message: `Opened ${resolved}` };
     } catch (error: unknown) {
@@ -193,7 +300,9 @@ export class FileManager {
   /** Check if a path exists. */
   async exists(targetPath: string): Promise<boolean> {
     try {
-      await fs.access(this.resolvePath(targetPath));
+      const resolved = this.resolvePath(targetPath);
+      if (!this.validatePath(resolved, true)) return false;
+      await fs.access(resolved);
       return true;
     } catch {
       return false;
